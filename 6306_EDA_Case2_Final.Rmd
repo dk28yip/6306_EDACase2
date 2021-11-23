@@ -1,0 +1,336 @@
+---
+title: "Case2"
+author: "Douglas Yip"
+date: "11/17/2021"
+output: html_document
+
+---
+# Frito Lay HR Attrition
+
+## Executive Summary
+
+#### The purpose of this review is to provide Frito Lay Talent Management Team an iterative process with developing and retaining employees.  The insights to this analysis are based on the data that was shared by Frito Lay that includes workforce planning, employee training programs, identifying high-potential employees and reducing/preventing voluntary employee turnover (attrition).  We will provide a series of recommendations that identify potential opportunites to improve attrition. 
+
+## Recommendation
+
+#### We recommend that your company to reevaluate 3 things to reduce your attrition rate.  We recommend your teams to action against the following; 
+#### 1 - Re-evaluate your Travel program for associates who travel frequently - Create a survey to identify how often is the travel, how long are the trips and incentives vs industry?
+#### 2 - Re-evaluate your Overtime policies to ensure equitable working conditions and wage - Investigate into potentials issues like forced overtime, reasons why people work overtime, and comparison vs industry
+#### 3 - Comp and Ben team to review job description and wage requirements - Evaluate your low band levels like Sales associates and Research Scientist and compare to industry
+
+```{r load packages setup, include=FALSE}
+
+library(readr) #used to read CSV
+library(stringr)
+library(tidyverse) #enables piping
+library(tidytext)
+library(janitor)
+library(scales)
+library(plotly)
+library(glue)
+library(patchwork)
+library(skimr)
+library(ggplot2) #enables graphical plots
+library(ggpubr) #enables to put multiple plots into one
+library(hrbrthemes)
+library(viridis)
+library(GGally)
+library(RColorBrewer)
+library(caret) #enables classification and regression training
+library(e1071)
+library(class)
+
+library(tidymodels)
+library(themis)
+
+```
+
+```{r load data}
+#create dataload and clean data
+dfhr <- read_csv("https://raw.githubusercontent.com/dk28yip/6306_EDACase2/main/CaseStudy2-data.csv", show_col_types = FALSE) 
+dfhr$Department[dfhr$Department == "Research & Development"] <-"R&D"
+dfhr$Department[dfhr$Department == "Human Resources"] <-"HR"
+#add different columns to data set
+dfhr$AttritionValue<-ifelse(dfhr$Attrition=="Yes",1,0) #Convert to numberic 1,0
+dfhr$OverTimeValue<-ifelse(dfhr$OverTime=="Yes",1,0) #Convert to numberic 1,0
+dfhr$MonthlyIncome_Factor <- cut(dfhr$MonthlyIncome, breaks = c(-0.1,5000,10000,15000,30000), labels = c("0-4.99","5-9.99","10-14.99",">15")) #Create Groups
+dfhr$YearAtCompany_Factor <- cut(dfhr$YearsAtCompany, breaks = c(-5,4,8,12,40), labels = c("0-4","5-8","9-12","+12")) #Create Groups
+
+```
+
+### What type of distribution do we observe based on tenure and wage?  Where could we potentially focus on reducing turnover?
+```{r code}
+
+#Attrition total
+dfhr %>% count(Attrition, sort = T) %>% mutate(percentage = str_c(round(n / sum(n) * 100, 0), "%")) %>% ggplot(aes(x="", y=percentage,fill=Attrition)) + geom_bar(stat="identity", width=1) + coord_polar("y", start=0) + scale_fill_brewer(palette = "Pastel2") + geom_text(aes(label = paste(percentage)), position = position_stack(vjust = 0.5)) + theme_classic() + theme(plot.title = element_text(hjust=0.5), axis.line = element_blank(), axis.text = element_blank(), axis.ticks = element_blank()) + labs(fill = "Attrition", x = NULL, y = NULL, title = "Pie Chart of Attrition Headcount")
+
+#Attrition by department
+dfhr %>% group_by(Department, Attrition) %>% summarize(hrsum=n()) %>% ggplot(aes(fill = Attrition, x=Department, y=hrsum)) + geom_bar(position="stack", stat="identity") + ggtitle("Department Headcount Summary") + xlab("Department") + ylab("Head Count")+ geom_text(aes(label = stat(y), group = Department), stat = 'summary', fun = sum, vjust = -1) + scale_fill_brewer(palette = "Pastel2") + coord_flip()
+
+#Attrition based on Income Levels
+t1 <- dfhr %>% group_by(MonthlyIncome_Factor, Attrition) %>% filter(Attrition == "Yes") %>% count(Attrition, sort = T)
+t1.p <- ggtexttable(t1, rows = NULL,theme = ttheme("mOrange"))
+
+#Attrition based on Tenure
+t2 <- dfhr %>% group_by(YearAtCompany_Factor, Attrition) %>% filter(Attrition == "Yes") %>% count(Attrition, sort = T)
+t2.p <- ggtexttable(t2, rows = NULL,theme = ttheme("mOrange"))
+
+#plot histogram of the tenure folks by attrition
+p1.p <- dfhr %>% ggplot(aes(fill = Attrition, x = YearsAtCompany)) + geom_histogram(bins = 30) + scale_fill_brewer(palette = "Pastel2") + ggtitle("Attrition by Tenure") + ylab("Head Count")
+
+#plot histogram of income level by attrition
+p2.p <- dfhr %>% ggplot(aes(fill = Attrition, x = MonthlyIncome)) + geom_histogram(bins = 30) + scale_fill_brewer(palette = "Pastel2") + ggtitle("Attrition by Montly Income") + ylab("Head Count")
+
+#group plots into one
+ggarrange(p1.p,p2.p,t1.p,t2.p, ncol =2, nrow =2,heights = c(1, 0.5))
+
+```
+
+
+#### We see an unbalance dataset where we have 16% of the associates tagged as leaving the company.  We have mainly R&D associates at a 562 count and Sales at a 273 count.  Given that FritoLay is a Fortune 500 Consumer Packages Goods Company, this datasets seems unreasonable outcome of attrition but we will continue our study to idenitify opportunities.
+
+#### We also observe a right skewed distribution for attrition for both tenure and salary.  We observed that  majority of the attrituion occurs at incomes levels less than $10,000 a month and tenure less than 12 years.  We will treat these employees employees as outliers as their reasons to leaving maybe due to retirement or other career advancements that are not reflected in the data.
+
+```{r clean data}
+#We cleaned a data set to exclude outliers to study the data more carefully
+dfhr_clean <- dfhr %>% filter(MonthlyIncome < 10000) %>% filter(YearsAtCompany <12)
+
+```
+
+### Does work-life balance of an associate impact the reason why people leave the organization?
+```{r worklife balance}
+#Create Attrition box plot given work life balance and distance from home
+p3.p <- dfhr_clean %>% ggplot(aes(x= WorkLifeBalance, y=DistanceFromHome, group = WorkLifeBalance, fill = WorkLifeBalance)) + geom_boxplot() + theme(legend.position="none",plot.title = element_text(size = 8, face = "bold")) + facet_wrap(~ Attrition) + ggtitle("Commute and work life balance impact to Attrition")
+
+#Create % Attrition bar graph given travel status
+p4.p <- dfhr_clean %>% ggplot(aes(x= BusinessTravel, group=Attrition)) + geom_bar(aes(y = ..prop.., fill = factor(..x..)), stat="count", alpha = 0.8) + geom_text(aes(label = scales::percent(..prop..), y = ..prop.. ), stat= "count", vjust = -.5) + labs(y = "Percentage", fill="Business Travel") + facet_grid(~Attrition) + scale_y_continuous(labels=percent) + theme(legend.position = "none",plot.title = element_text(size = 8, face = "bold")) + ggtitle("Business Travel impact to Attrition") + scale_fill_brewer(palette = "Pastel2") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+
+#group plots into one
+ggarrange(p3.p,p4.p, ncol =2, nrow =1)
+
+```
+
+
+#### Assuming that 1 is best and 4 is worse for worklife balance, the distance from home in most cases resulted in a higher level attrition at all levels where the median commute impacted worklife balance scores.  Worklife balance scores at 4 left the organizations for other reason that are not commute related.  We have a few inconsistencies and inconclusive that worklife balance is related to the attrition rate.
+##However, we observed a significantly higher level of attrition for individuals that are traveling frequently.  Recommendation is reevaluate your travel policies to ensure that associates maintain worklife balance and to limit the turnover with the traveling population.
+
+### Based on what we know on work life balance, do individuals working overtime impact an associates decision to leave the company?
+```{r overtime}
+#look at Overtime by attrition
+p5.p <- dfhr_clean %>% ggplot(aes(x = OverTime, group = Attrition)) + geom_bar(aes(y = ..prop.., fill = factor(..x..)), stat="count", alpha = 0.7) + geom_text(aes(label = scales::percent(..prop..), y = ..prop.. ), stat= "count", vjust = -.5) + labs(y = "Percentage", fill= "OverTime") + facet_grid(~Attrition) + scale_fill_brewer(palette = "Pastel2") + theme(legend.position = "none") + ggtitle("Attrition by Overtime Group")
+
+#look at tenure and length in role in respects to overtime and attrition
+p6.p <- dfhr_clean %>% ggplot(aes(y = YearsSinceLastPromotion, x = YearsAtCompany, colour = OverTime)) + geom_jitter(size = 0.8, alpha = 0.5) + geom_smooth(method = "lm") + facet_wrap(~ Attrition) + ggtitle("Attrition by tenure (<12Year) and length in role") + scale_fill_brewer(palette = "Pastel2")
+
+ggarrange(p5.p,p6.p, ncol =1, nrow =2)
+```
+
+
+#### Overtime Status significantly impacts an associates reasons to leave.  In addition,  we observe the longer one stays in one role for a longer period time that requires overtime, the greater the likelyhood to quitting vs the ones that don't have to work overtime. We recommend that HR re-evaluate your mandatory overtime practices to ensure that employees don't quit due to burn out.
+
+
+### Is there a particular department or role that over indexes in attrition vs others?
+### Where are we seeing the most attrition by Department and Role?
+```{r, Proportions VS Attrition Function, fig.align = "center"}
+
+#Create User defined Function.
+#Proportions features VS Attrition Function
+
+bar_plot_proportions <- function(feature, target){
+  
+  varCat <- as_label(enquo(feature))
+  varCat <- str_to_title(str_replace(varCat, "_", " "))
+  
+  if(missing(target)) {
+    prop_data <- dfhr_clean %>%  
+      group_by({{feature}}) %>% 
+      summarise(n = n(), .groups = "drop") %>% 
+      ungroup() %>% 
+      mutate(percent = str_c(round(n/sum(n)*100,0),"%"),
+             just = n/4,
+             VarName = fct_reorder(factor({{feature}}), n ),
+             label_hjust = case_when(
+                  n < quantile(n, probs = 0.85) ~ -0.2,
+                  TRUE ~ 1.1,
+                ), 
+             label_color = case_when(
+                  n < quantile(n, probs = 0.85) ~ "black",
+                  TRUE ~ "white",
+                ))
+    
+    ggplot(prop_data, aes(x = VarName, y = n, fill = VarName)) +
+      geom_col(width = 0.7,
+               size = 1,
+               show.legend = FALSE) +
+      coord_flip() +
+      geom_text(show.legend = FALSE,
+                aes(y = n, label = str_c(percent,n, sep = " "), hjust = label_hjust,
+                    color = label_color) ,
+                size = 2.5
+      ) +
+      scale_y_continuous(expand = expansion(add = c(50, max(prop_data$just)))) +
+      scale_fill_viridis_d(direction = -1) +
+      scale_color_manual(values = c("black", "white")) +
+      theme(
+        legend.position = "right",
+        plot.background = element_rect(colour = "gray"),
+        plot.title.position = "panel",
+        plot.title = element_text(size = 10, hjust = 0.5),
+        plot.subtitle = element_text(size = 8),
+        plot.caption.position = "plot",
+        plot.caption = element_text(size = 6, color = "grey"),
+        panel.grid = element_blank(),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.text.y = element_text(size = 8)
+      ) +
+      labs(
+        title = NULL,
+        subtitle = NULL,
+        x = NULL,
+        y = NULL
+      ) 
+    
+  } 
+  else {
+    
+    prop_data <- dfhr_clean %>%  
+      group_by({{feature}},{{target}}) %>% 
+      summarise(n = n(), .groups = "drop") %>% 
+      ungroup() %>% 
+      mutate(percent = str_c(round(n/sum(n)*100,0),"%"),
+             just = n/4,
+             VarName = reorder_within(factor({{feature}}), n, {{target}}),
+             label_hjust = case_when(
+                  n < quantile(n, probs = 0.85) ~ -0.2,
+                  TRUE ~ 1.1,
+                ), 
+             label_color = case_when(
+                  n < quantile(n, probs = 0.85) ~ "black",
+                  TRUE ~ "white",
+                ))
+    
+    ggplot(prop_data, aes(x = VarName, y = n, fill = VarName)) +
+      geom_col(width = 0.7,
+               size = 1,
+               show.legend = FALSE) +
+      coord_flip() +
+      geom_text(show.legend = FALSE,
+                aes(y = n, label = str_c(percent,n, sep = " "), hjust = label_hjust,
+                    color = label_color) ,
+                size = 2.5
+      ) +
+      facet_wrap(vars({{target}}), scales = "free_y")+
+      scale_y_continuous(expand = expansion(add = c(10, max(prop_data$just)))) +
+      scale_x_reordered() +
+      scale_fill_viridis_d(direction = -1) +
+      scale_color_manual(values = c("black", "white")) +
+      theme(
+        legend.position = "right",
+        strip.background = element_rect(fill = "#CD3B16"),
+        strip.text = element_text(color = "white", face = "bold", size = 8),
+        plot.background = element_rect(colour = "gray"),
+        plot.title.position = "panel",
+        plot.title = element_text(size = 10, hjust = 0.5),
+        plot.subtitle = element_text(size = 8),
+        plot.caption.position = "plot",
+        plot.caption = element_text(size = 6, color = "grey"),
+        panel.grid = element_blank(),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.text.y = element_text(size = 6)
+      ) +
+      labs(
+        title = glue("{varCat} VS Attrition"),
+        subtitle = NULL,
+        x = NULL,
+        y = NULL
+      )
+  }
+    
+}
+
+
+```
+
+```{r Plot Proportion}
+
+plt_Department <- bar_plot_proportions(Department)
+plt_Department_att <- bar_plot_proportions(Department, Attrition)
+
+(plt_Department +
+   plt_Department_att)+ 
+  plot_annotation(
+  title = "Proportions of Deparment VS Attrition",
+) & 
+  theme(plot.caption = element_text(size = 7))
+
+plt_JobRole <- bar_plot_proportions(JobRole)
+plt_JobRole_att <- bar_plot_proportions(JobRole, Attrition)
+
+(plt_JobRole +
+   plt_JobRole_att)+ 
+  plot_annotation(
+  title = "Proportions of Role VS Attrition",
+) & 
+  theme(plot.caption = element_text(size = 7))
+
+JobLevelChart <- dfhr_clean %>% group_by(Attrition,JobRole, JobLevel) %>% filter(JobRole == "Research Scientist" | JobRole =="Sales Representative") %>%  count(Attrition, sort = T)
+JobLevelChart2 <- spread(JobLevelChart,Attrition,n) #create summary table of roles
+JobLevelChart2[is.na(JobLevelChart2)] <- 0 #sort table
+ggtexttable(JobLevelChart2,rows = NULL,theme = ttheme("mOrange"))  #create theme for table
+```
+
+
+#### We observed that the Sales and R&D Function have the higher number of attrition.  Specifically we observed Sales Reps 24/52 and Lab Tech 29/140 over indexing higher vs all other roles.  All these roles that have high attrition have low level bands.  This variable will be considered in our predictive modeling.
+
+### Based on our knowledge about attrition, we will determine which model will give us a specificity and sensitivity of >60%.
+```{r Find Best Model}
+
+#Determine the training sets to be used in model. 
+set.seed(128)
+splitPerc = .75
+filterdfhr <- dfhr %>% select(Attrition, MonthlyIncome, OverTimeValue, JobLevel, YearsAtCompany)
+
+train1 = sample(1:dim(filterdfhr)[1],round(splitPerc * dim(filterdfhr)[1])) #dim(filterdfhr)[1] will determine thte total number of rows
+train = filterdfhr[train1,]
+test = filterdfhr[-train1,]
+
+
+#knn = 3
+modelknn = knn(train[,c(2,3,4,5)],test[,c(2,3,4,5)],train$Attrition, prob = TRUE, k = 3) #confusion matrix
+confusionMatrix(table(modelknn,test$Attrition))
+
+
+#Naives Bayes
+modelnb = naiveBayes(train[,c(2,3,4,5)],train$Attrition)
+confusionMatrix(table(predict(modelnb,test[,c(2,3,4,5)]),test$Attrition))
+```
+
+
+#### Based on the analytics, we will utilize  Montly Income, OverTime status, Job Level and Years as our Predictors to attrition.  
+#### We utilize these variables for both the KNN and Naive Bayes predictive model.  The predicting model that best predicts whiles achieving a good balance of sensitivity and specificity is the Naive Bayes Model with 92% Sensitivity and 49% Specificity.  In addition, accruacy of the model predicting No Attrition was at 84%.  
+
+### Assuming that these variables are reasons why people leave, is this a good predictor for income.  We will use a multi linear regression model to determine whether a RMSE of <3000 is achieved.
+```{r linear model}
+#Linear model
+modellm <- lm(MonthlyIncome ~ YearsAtCompany + OverTimeValue + JobLevel, data = train)
+summary(modellm)
+
+#calculate the RMSE of the Linear Model
+sqrt(mean(modellm$residuals^2))
+```
+
+
+#### The trained model predicting Monthly Wage --> Monthly Wage = -1756.78 - 11.77(YearsAtCompany) - 26.75(OT status) + 4029.77(JobLevel)
+#### We trained the model to predict monthly income given Years at the company, their Overtime Status, the job level.  Utilizing the model, the monthly income prediction to our test data achieved an adjust R2 of 0.9047.  An unadjusted  R2 was 0.9051 as such we did not sacrifice much of R2 to achieve a high correlation to monthly income.  Based on our model we achieved an RMSE better than the <$3000 target with a $1401.28 RMSE.
+
+
+## Recommendation
+
+#### We recommend that your company to reevaluate 3 things to reduce your attrition rate.  We recommend your teams to action against the following; 
+#### 1) Re-evaluate your Travel program for associates who travel frequently - Create a survey to identify how often is the travel, how long are the trips and incentives vs industry?
+#### 2) Re-evaluate your Overtime policies to ensure equitable working conditions and wage - Investigate into potentials issues like forced overtime, reasons why people work overtime, and comparison vs industry
+#### 3) Comp and Ben team to review job description and wage requirements - Evaluate your low band levels like Sales associates and Research Scientist and compare to industry
+
