@@ -9,4 +9,4 @@ Repository contains the following files for the SMU DS6306 EDA2 project.
 6) Presentations YouTube link - <br />
  &nbsp;https://youtu.be/QkTayKoNo6g<br />
 6) ShinyR link - <br />
- &nbsp;https://youtu.be/QkTayKoNo6g<br />
+ &nbsp;https://dk28yip.shinyapps.io/6306_SMU_EDA2_Yip/g<br />
