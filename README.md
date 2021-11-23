@@ -6,5 +6,7 @@ Repository contains the following files for the SMU DS6306 EDA2 project.
  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;   a) RMD markdown file containing the code and answers to the project <br />
  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;   b) HTML of the Final knit file of Rmarkdown file <br />
 5) Power Presentation - 6306 EDA Case2(Final).ppt
-6) Individual Presentations YouTube links - <br />
+6) Presentations YouTube link - <br />
+ &nbsp;https://youtu.be/QkTayKoNo6g<br />
+6) ShinyR link - <br />
  &nbsp;https://youtu.be/QkTayKoNo6g<br />
